@@ -20,6 +20,12 @@ const els = {
   progressText: document.getElementById("progress-text"),
   recordAlert: document.getElementById("record-alert"),
   recsBody: document.getElementById("recs-body"),
+  constMin: document.getElementById("const-min"),
+  cRun: document.getElementById("c-run"),
+  cTotal: document.getElementById("c-total"),
+  cActive: document.getElementById("c-active"),
+  constRunLine: document.getElementById("const-run-line"),
+  constBody: document.getElementById("const-body"),
   wave: document.getElementById("wave"),
   previewNote: document.getElementById("preview-note"),
   toast: document.getElementById("toast"),
@@ -119,12 +125,69 @@ function renderStatus(snap) {
   }
 
   renderRecordings(snap.recordings, stream);
+  renderConst(snap.const_check);
+}
+
+// ------------------------------------------------------- constant check
+function constStatusTag(alarm) {
+  const cls = alarm.status === "active" ? "recording"
+    : alarm.status === "interrupted" ? "failed" : "completed";
+  return `<span class="tag ${cls}">${esc(alarm.status_label)}</span>`;
+}
+
+function renderConst(cc) {
+  if (!cc) return;
+  els.constMin.textContent = cc.min_run;
+
+  const run = cc.current_run;
+  const runCount = run ? run.count : 0;
+  els.cRun.textContent = runCount > 1 ? `${runCount} 条` : "—";
+  els.cRun.className = "v" + (run && run.alarm_id ? " warn" : "");
+  els.cTotal.textContent = cc.alarm_total;
+  els.cActive.textContent = cc.active_total;
+  els.cActive.className = "v" + (cc.active_total > 0 ? " warn" : "");
+
+  if (run && run.count > 1) {
+    const base = `当前同值 ${run.value} g × ${run.count} 条（段#${run.epoch}，#${run.start_seq} 起）`;
+    els.constRunLine.textContent = run.alarm_id
+      ? `${base}，已构成告警 ${run.alarm_id}，同值持续中`
+      : run.count >= cc.min_run / 2
+        ? `${base}，再连续 ${cc.min_run - run.count} 条即告警`
+        : `${base}，未满 ${cc.min_run} 条不构成告警`;
+  } else {
+    els.constRunLine.textContent = "当前无连续同值采样";
+  }
+
+  if (!cc.alarms.length) {
+    els.constBody.innerHTML =
+      '<tr><td colspan="8" class="muted" style="font-family:var(--sans)">暂无恒值告警</td></tr>';
+    return;
+  }
+  const rows = [...cc.alarms].reverse().map((a) => {
+    const end = a.end_seq != null
+      ? `#${a.end_seq}`
+      : `<span class="muted">进行中（已至 #${a.last_seq}）</span>`;
+    const recs = a.recordings && a.recordings.length
+      ? a.recordings.map((r) => `<span class="hit-badge">${esc(r)}</span>`).join(" ")
+      : '<span class="muted" style="font-family:var(--sans)">—</span>';
+    return `<tr>
+      <td>${esc(a.id)}</td>
+      <td>段#${a.epoch}</td>
+      <td>${Number(a.value).toFixed(4)}</td>
+      <td>#${a.start_seq}</td>
+      <td>${end}</td>
+      <td>${a.count}</td>
+      <td>${constStatusTag(a)}</td>
+      <td class="hits">${recs}</td>
+    </tr>`;
+  });
+  els.constBody.innerHTML = rows.join("");
 }
 
 function renderRecordings(recordings, stream) {
   if (!recordings.length) {
     els.recsBody.innerHTML =
-      '<tr><td colspan="6" class="muted" style="font-family:var(--sans)">暂无录波</td></tr>';
+      '<tr><td colspan="7" class="muted" style="font-family:var(--sans)">暂无录波</td></tr>';
     return;
   }
   // newest first
@@ -138,11 +201,17 @@ function renderRecordings(recordings, stream) {
         : '<span class="muted" style="font-family:var(--sans);font-size:12px">等待完成</span>';
     const progress = `${rec.pre_count}/${rec.pre_target} + ${rec.post_count}/${rec.post_target}`;
     const note = rec.error ? `<span style="color:#ffb0b0">${esc(rec.error)}</span>` : "—";
+    const hits = (rec.const_hits && rec.const_hits.length)
+      ? rec.const_hits.map((h) =>
+          `<span class="hit-badge" title="恒值 ${h.value} g · ${esc(h.alarm_status_label)}">⚠ ${esc(h.alarm_id)} 交叠 #${h.overlap_start}–#${h.overlap_end}</span>`
+        ).join(" ")
+      : '<span class="muted" style="font-family:var(--sans)">—</span>';
     return `<tr>
-      <td>${label}</td>
+      <td>${label}<div class="muted" style="font-family:var(--sans);font-size:11px">段#${rec.epoch}</div></td>
       <td>${rec.anchor_seq}</td>
       <td><span class="tag ${rec.status}">${esc(rec.status_label)}</span></td>
       <td style="font-size:12px">${progress}${progressBar(rec)}</td>
+      <td class="hits">${hits}</td>
       <td class="err">${note}</td>
       <td>${file}</td>
     </tr>`;

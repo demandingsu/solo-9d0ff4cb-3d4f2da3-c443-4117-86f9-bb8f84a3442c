@@ -27,6 +27,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .constcheck import ConstTracker
+
 log = logging.getLogger("capture")
 
 PRE_COUNT = 100
@@ -118,6 +120,13 @@ class Recording:
     received_total: int = 0
     error: str | None = None
     finished_at: str | None = None
+    # Sampling segment (epoch) this recording belongs to.  Sequence numbers
+    # are only comparable inside one segment: after a break the instrument
+    # may restart numbering, and same-numbered samples of another segment
+    # must never be mixed into this window or its constant-value hits.
+    epoch: int = 0
+    start_seq: int | None = None
+    end_seq: int | None = None
 
     @property
     def received(self) -> int:
@@ -131,7 +140,7 @@ class Recording:
             "failed": "失败",
         }[self.status]
 
-    def as_dict(self) -> dict:
+    def as_dict(self, const_hits: list[dict] | None = None) -> dict:
         return {
             "id": self.id,
             "anchor_seq": self.anchor_seq,
@@ -148,6 +157,10 @@ class Recording:
             "finished_at": self.finished_at,
             "error": self.error,
             "downloadable": self.status == "completed",
+            "epoch": self.epoch,
+            "start_seq": self.start_seq,
+            "end_seq": self.end_seq,
+            "const_hits": const_hits if const_hits is not None else [],
         }
 
 
@@ -169,6 +182,8 @@ class CaptureService:
         self._bad_lines = 0
         self._discontinuities = 0
         self._last_error: dict | None = None
+        # Stuck-sensor (constant value) tracking; driven under _lock only.
+        self._const = ConstTracker()
 
     # -- link lifecycle ---------------------------------------------------
     def link_connected(self) -> None:
@@ -215,6 +230,10 @@ class CaptureService:
         if count:
             self._discontinuities += 1
         self._last_error = {"error": message, "at": iso_now()}
+        # A break ends any in-progress constant-value alarm as interrupted and
+        # wipes the candidate run; the next segment starts from zero and is
+        # never spliced onto this one.
+        self._const.break_stream()
         for rec in self._recordings.values():
             if rec.status == "recording":
                 rec.received_total = len(rec.samples)
@@ -259,12 +278,19 @@ class CaptureService:
             self._last_sample = sample
             self._received_total += 1
             self._last_error = None
+            alarm = self._const.ingest(sample, self._epoch)
+            if alarm is not None:
+                log.info(
+                    "constant-value alarm %s: %s g from seq %s (epoch %s)",
+                    alarm.id, alarm.value, alarm.start_seq, alarm.epoch,
+                )
             for rec in self._recordings.values():
                 if rec.status != "recording":
                     continue
                 rec.samples.append(sample)
                 if len(rec.samples) >= TOTAL_COUNT:
                     rec.status = "completed"
+                    rec.end_seq = sample.seq
                     rec.finished_at = iso_now()
                     log.info(
                         "recording %s completed (%s..%s)",
@@ -289,6 +315,8 @@ class CaptureService:
                 anchor_ts=anchor.ts,
                 created_at=iso_now(),
                 samples=pre,
+                epoch=self._epoch,
+                start_seq=pre[0].seq,
             )
             self._recordings[rec.id] = rec
             log.info("recording %s started, anchor seq %s", rec.id, anchor.seq)
@@ -301,6 +329,93 @@ class CaptureService:
     def recordings(self) -> list[Recording]:
         with self._lock:
             return list(self._recordings.values())
+
+    # -- constant-value (stuck sensor) check -------------------------------
+    def _const_hits_locked(self, rec: Recording) -> list[dict]:
+        """Confirmed alarms of the same segment intersecting a completed rec.
+
+        Computed on read, under the lock, so a hit appears as soon as the
+        alarm is confirmed -- even when the 64th identical sample arrives
+        after the recording has already completed -- and always reflects the
+        same sampling progress as the alarm list itself.
+        """
+        if (
+            rec.status != "completed"
+            or rec.start_seq is None
+            or rec.end_seq is None
+        ):
+            return []
+        hits = []
+        for alarm in self._const.alarms:
+            if alarm.epoch != rec.epoch:
+                # same sequence numbers in a different segment are unrelated
+                continue
+            lo = max(rec.start_seq, alarm.start_seq)
+            hi = min(rec.end_seq, alarm.last_seq)
+            if lo > hi:
+                continue
+            hits.append(
+                {
+                    "alarm_id": alarm.id,
+                    "epoch": alarm.epoch,
+                    "value": alarm.value,
+                    "overlap_start": lo,
+                    "overlap_end": hi,
+                    "alarm_status": alarm.status,
+                    "alarm_status_label": alarm.status_label,
+                }
+            )
+        return hits
+
+    def _recording_dict_locked(self, rec: Recording) -> dict:
+        return rec.as_dict(const_hits=self._const_hits_locked(rec))
+
+    def recording_dicts(self) -> list[dict]:
+        with self._lock:
+            return [self._recording_dict_locked(r) for r in self._recordings.values()]
+
+    def recording_dict(self, rid: str) -> dict | None:
+        with self._lock:
+            rec = self._recordings.get(rid)
+            return None if rec is None else self._recording_dict_locked(rec)
+
+    def _const_check_locked(self) -> dict:
+        completed = [
+            r
+            for r in self._recordings.values()
+            if r.status == "completed"
+            and r.start_seq is not None
+            and r.end_seq is not None
+        ]
+        alarms = []
+        for alarm in self._const.alarms:
+            d = alarm.as_dict()
+            # every overlapping completed recording of the same segment may
+            # be linked to this alarm
+            d["recordings"] = [
+                r.id
+                for r in completed
+                if r.epoch == alarm.epoch
+                and max(r.start_seq, alarm.start_seq)
+                <= min(r.end_seq, alarm.last_seq)
+            ]
+            alarms.append(d)
+        run = self._const.current_run()
+        if run is not None:
+            run["epoch"] = self._epoch
+        return {
+            "min_run": self._const.min_run,
+            "current_run": run,
+            "alarms": alarms,
+            "alarm_total": len(alarms),
+            "active_total": sum(
+                1 for a in self._const.alarms if a.status == "active"
+            ),
+        }
+
+    def const_check(self) -> dict:
+        with self._lock:
+            return self._const_check_locked()
 
     def preview_tail(self, count: int) -> list[dict]:
         with self._lock:
@@ -349,7 +464,11 @@ class CaptureService:
                     },
                     "last_error": self._last_error,
                 },
-                "recordings": [r.as_dict() for r in self._recordings.values()],
+                "recordings": [
+                    self._recording_dict_locked(r)
+                    for r in self._recordings.values()
+                ],
+                "const_check": self._const_check_locked(),
             }
 
 

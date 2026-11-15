@@ -6,10 +6,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
-COPY requirements.txt ./
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . /srv
+# Keep the package layout: /srv/app/… so `app.app:app` resolves as a package
+# (app.py uses relative imports and cannot run flattened into /srv).
+COPY . /srv/app
 
 EXPOSE 8000
 

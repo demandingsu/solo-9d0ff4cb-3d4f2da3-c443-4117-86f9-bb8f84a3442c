@@ -106,6 +106,38 @@ def main() -> None:
         rows = csv_bytes.decode().strip().split("\n")
         assert rows[0] == "序号,采样时间,加速度" and len(rows) == 301
 
+        # 5b. stuck-sensor constant run: alarm confirmed at 64 identical
+        # samples and linked to the completed recording it overlaps
+        http("POST", "http://127.0.0.1:8001/api/send", {"count": 100})
+        wait_for(lambda: http("GET", "http://127.0.0.1:8000/api/status")[1]
+                 ["stream"]["can_record"], "can record before constant run")
+        status, rec_c, _ = http("POST", "http://127.0.0.1:8000/api/recordings")
+        assert status == 201
+        _, out, _ = http("POST", "http://127.0.0.1:8001/api/constant",
+                         {"count": 80, "value": 0.85})
+        assert out["sent"] == 80, out
+        http("POST", "http://127.0.0.1:8001/api/send", {"count": 120})
+        wait_for(lambda: next(r for r in http("GET", "http://127.0.0.1:8000/api/status")[1]["recordings"]
+                              if r["id"] == rec_c["id"])["status"] == "completed",
+                 "constant-run recording completed")
+        snap = http("GET", "http://127.0.0.1:8000/api/status")[1]
+        const_check = snap["const_check"]
+        assert const_check["alarm_total"] == 1, const_check
+        alarm = const_check["alarms"][0]
+        assert alarm["count"] == 80 and alarm["status"] == "ended"
+        assert alarm["value"] == 0.85
+        mine = next(r for r in snap["recordings"] if r["id"] == rec_c["id"])
+        assert mine["const_hits"], mine
+        hit = mine["const_hits"][0]
+        assert hit["alarm_id"] == alarm["id"]
+        assert (hit["overlap_start"], hit["overlap_end"]) == (
+            alarm["start_seq"], alarm["end_seq"])
+        assert alarm["recordings"] == [rec_c["id"]]
+        # dedicated endpoint agrees with the embedded snapshot
+        _, alarms_api, _ = http("GET", "http://127.0.0.1:8000/api/const-alarms")
+        assert alarms_api["alarm_total"] == 1
+        assert alarms_api["alarms"][0]["id"] == alarm["id"]
+
         # 6. sequence jump must fail a fresh in-flight recording
         http("POST", "http://127.0.0.1:8001/api/send", {"count": 120})
         wait_for(lambda: http("GET", "http://127.0.0.1:8000/api/status")[1]

@@ -46,6 +46,7 @@ class Emitter:
         self._rng = random.Random(20261113)
         self._sent_total = 0
         self._dropped_total = 0
+        self._constant_total = 0
         self._skips = 0
         self._disconnects = 0
         self._last_batch_at: str | None = None
@@ -62,6 +63,7 @@ class Emitter:
         self._rng = random.Random(20261113)
         self._sent_total = 0
         self._dropped_total = 0
+        self._constant_total = 0
         self._skips = 0
         self._disconnects = 0
         self._last_batch_at = None
@@ -121,21 +123,24 @@ class Emitter:
             self._connected_at = None
 
     # -- waveform ---------------------------------------------------------
-    def _next_line(self, *, jump: int = 0) -> tuple[int, bytes, float]:
+    def _next_line(
+        self, *, jump: int = 0, accel: float | None = None
+    ) -> tuple[int, bytes, float]:
         # Normal call keeps the current sequence; a jump skips extra numbers.
         self._seq += max(0, jump)
         self._sample_index += 1
         self._virtual_ts += timedelta(microseconds=SAMPLE_INTERVAL_US)
-        # Slow structural vibration + a little noise; occasional shock so the
-        # trace is interesting on screen.
-        t = self._sample_index / 1000.0
-        accel = (
-            0.62 * math.sin(2 * math.pi * 6.5 * t)
-            + 0.18 * math.sin(2 * math.pi * 23.0 * t + 0.7)
-            + self._rng.gauss(0.0, 0.06)
-        )
-        if self._rng.random() < 0.002:
-            accel += self._rng.choice((-1, 1)) * self._rng.uniform(1.5, 3.5)
+        if accel is None:
+            # Slow structural vibration + a little noise; occasional shock so
+            # the trace is interesting on screen.
+            t = self._sample_index / 1000.0
+            accel = (
+                0.62 * math.sin(2 * math.pi * 6.5 * t)
+                + 0.18 * math.sin(2 * math.pi * 23.0 * t + 0.7)
+                + self._rng.gauss(0.0, 0.06)
+            )
+            if self._rng.random() < 0.002:
+                accel += self._rng.choice((-1, 1)) * self._rng.uniform(1.5, 3.5)
         ts = self._virtual_ts.isoformat(timespec="microseconds").replace("+00:00", "Z")
         line = f"{self._seq},{ts},{accel:.6f}\n"
         result = (self._seq, line.encode("utf-8"), accel)
@@ -185,6 +190,58 @@ class Emitter:
             return {
                 "sent": count,
                 "dropped": 0,
+                "first_seq": seqs[0] if seqs else None,
+                "last_seq": seqs[-1] if seqs else None,
+                "connected": True,
+            }
+
+    async def send_constant(self, count: int, value: float) -> dict:
+        """Emit ``count`` samples that all carry the same acceleration.
+
+        Simulates a stuck sensor: the recorder raises a constant-value alarm
+        once 64 identical samples arrive inside one contiguous segment.
+        """
+        async with self._lock:
+            seqs: list[int] = []
+            chunks: list[bytes] = []
+            for _ in range(count):
+                seq, line, _ = self._next_line(accel=value)
+                seqs.append(seq)
+                chunks.append(line)
+            if self._writer is None:
+                self._dropped_total += count
+                self._last_batch_at = _now()
+                return {
+                    "sent": 0,
+                    "dropped": count,
+                    "value": value,
+                    "first_seq": seqs[0] if seqs else None,
+                    "last_seq": seqs[-1] if seqs else None,
+                    "connected": False,
+                }
+            try:
+                self._writer.write(b"".join(chunks))
+                await self._writer.drain()
+            except (ConnectionError, OSError):
+                self._writer = None
+                self._connected_at = None
+                self._dropped_total += count
+                self._last_batch_at = _now()
+                return {
+                    "sent": 0,
+                    "dropped": count,
+                    "value": value,
+                    "first_seq": seqs[0] if seqs else None,
+                    "last_seq": seqs[-1] if seqs else None,
+                    "connected": False,
+                }
+            self._sent_total += count
+            self._constant_total += count
+            self._last_batch_at = _now()
+            return {
+                "sent": count,
+                "dropped": 0,
+                "value": value,
                 "first_seq": seqs[0] if seqs else None,
                 "last_seq": seqs[-1] if seqs else None,
                 "connected": True,
@@ -266,6 +323,7 @@ class Emitter:
             "last_seq": self._seq if self._sample_index else None,
             "sent_total": self._sent_total,
             "dropped_total": self._dropped_total,
+            "constant_total": self._constant_total,
             "skips": self._skips,
             "disconnects": self._disconnects,
             "last_batch_at": self._last_batch_at,
@@ -295,6 +353,11 @@ server: asyncio.AbstractServer | None = None
 
 class BatchRequest(BaseModel):
     count: int = Field(default=50, ge=1, le=5000)
+
+
+class ConstantRequest(BaseModel):
+    count: int = Field(default=80, ge=1, le=5000)
+    value: float = Field(default=0.85, allow_inf_nan=False)
 
 
 class SkipRequest(BaseModel):
@@ -339,6 +402,11 @@ async def get_state() -> JSONResponse:
 @app.post("/api/send")
 async def send(req: BatchRequest) -> JSONResponse:
     return JSONResponse(await emitter.send_batch(req.count))
+
+
+@app.post("/api/constant")
+async def constant(req: ConstantRequest) -> JSONResponse:
+    return JSONResponse(await emitter.send_constant(req.count, req.value))
 
 
 @app.post("/api/skip")

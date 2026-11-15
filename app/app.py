@@ -76,15 +76,21 @@ async def preview(count: int = 240) -> JSONResponse:
 
 @app.get("/api/recordings")
 async def list_recordings() -> JSONResponse:
-    return JSONResponse({"recordings": [r.as_dict() for r in capture.recordings()]})
+    return JSONResponse({"recordings": capture.recording_dicts()})
 
 
 @app.get("/api/recordings/{rid}")
 async def get_recording(rid: str) -> JSONResponse:
-    rec = capture.recording(rid)
-    if rec is None:
+    data = capture.recording_dict(rid)
+    if data is None:
         return JSONResponse({"detail": "录波不存在"}, status_code=404)
-    return JSONResponse(rec.as_dict())
+    return JSONResponse(data)
+
+
+@app.get("/api/const-alarms")
+async def const_alarms() -> JSONResponse:
+    """Stuck-sensor check: candidate run plus all confirmed alarms."""
+    return JSONResponse(capture.const_check())
 
 
 @app.get("/api/recordings/{rid}/download")

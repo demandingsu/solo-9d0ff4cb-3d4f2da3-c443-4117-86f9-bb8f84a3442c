@@ -90,6 +90,32 @@
       </section>
 
       <section class="panel">
+        <h2>恒值采样（模拟传感器卡死）</h2>
+        <div class="record-box">
+          <div class="hint">以固定加速度连续发样，序号保持连续。录波页在同一连续采样段内检测到连续 64 条完全相同即产生恒值告警；跳号或断线会把进行中的告警标记为「中断结束」。</div>
+          <div class="record-actions">
+            <label class="muted" style="font-size:13px;">恒值
+              <input id="const-value" type="number" step="0.01" min="-50" max="50" value="0.85"
+                     style="width:88px; margin-left:6px; background:#1d2739; color:var(--text);
+                            border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit;">
+              <span style="margin-left:4px;">g</span>
+            </label>
+            <label class="muted" style="font-size:13px;">条数
+              <input id="const-count" type="number" min="1" max="5000" value="80"
+                     style="width:88px; margin-left:6px; background:#1d2739; color:var(--text);
+                            border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit;">
+            </label>
+          </div>
+          <div class="record-actions">
+            <button class="primary" id="btn-constant" type="button">发送恒值采样</button>
+            <button class="small" id="btn-constant-64" type="button">64 条（刚好告警）</button>
+            <button class="small" id="btn-constant-63" type="button">63 条（不告警）</button>
+          </div>
+          <div class="hint" id="const-state">累计恒值发送：0 条</div>
+        </div>
+      </section>
+
+      <section class="panel">
         <h2>连续发送</h2>
         <div class="record-box">
           <div class="hint">自动以固定频率发送，便于演示重叠录波：在两个浏览器标签页各发起一次录波，服务端会并行完成两份。</div>
@@ -118,6 +144,8 @@
           <li>打开录波页面（<a href="http://localhost:8000" target="_blank" rel="noopener">http://localhost:8000</a>）。</li>
           <li>点两次「发送 50 条」，服务端连续采样达到 100 条后即可录波。</li>
           <li>在录波页面点「发起录波」，再发 4 批 × 50 条，录波自动完成并下载。</li>
+          <li><strong>恒值核查</strong>：点「发送恒值采样」（默认 80 条 0.85 g），录波页「恒值核查」面板出现告警（≥64 条确认）；与已完成录波窗口相交时，录波记录会标出告警与交叠范围。</li>
+          <li>恒值发送中途点「发送一条跳号采样」或「断开 TCP 连接」，进行中的告警变为「中断结束」，重连后的同值采样重新计数、不跨段拼接。</li>
           <li>继续发样到 100 条以上，然后「发送一条跳号采样」——若录波进行中，则该次录波失败。</li>
           <li>再发 100 条以上重新点「发起录波」；同时在另一个标签页也发起一次，演示重叠录波。</li>
           <li>录波进行中点「断开 TCP 连接」，观察录波失败与自动重连恢复。</li>

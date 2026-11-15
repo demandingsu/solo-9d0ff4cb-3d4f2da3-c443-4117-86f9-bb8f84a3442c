@@ -20,6 +20,10 @@ const els = {
   autoRate: document.getElementById("auto-rate"),
   autoBatch: document.getElementById("auto-batch"),
   autoState: document.getElementById("auto-state"),
+  constValue: document.getElementById("const-value"),
+  constCount: document.getElementById("const-count"),
+  constBtn: document.getElementById("btn-constant"),
+  constState: document.getElementById("const-state"),
   toast: document.getElementById("toast"),
 };
 
@@ -79,6 +83,7 @@ function render(s) {
   els.autoState.textContent = s.auto
     ? `连续发送中：约 ${s.auto_rate} 批/秒`
     : "连续发送未开启";
+  els.constState.textContent = `累计恒值发送：${s.constant_total} 条`;
 }
 
 async function refresh() {
@@ -152,6 +157,30 @@ els.disconnectBtn.addEventListener("click", withBusy(els.disconnectBtn, async ()
   const out = await post("/api/disconnect", {});
   toast(out.was_connected ? "已断开 TCP 连接，等待录波服务重连" : "当前没有可断开的连接", "");
 }));
+
+async function sendConstant(count) {
+  const value = Number(els.constValue.value);
+  if (!Number.isFinite(value)) {
+    toast("恒值必须是有限数字", "err");
+    return;
+  }
+  const out = await post("/api/constant", { count, value });
+  if (out.connected) {
+    toast(`已发送 ${out.sent} 条恒值 ${value} g（#${out.first_seq}–#${out.last_seq}）`, "ok");
+  } else {
+    toast(`无录波服务连接，${out.dropped} 条恒值被丢弃（序号推进至 #${out.last_seq}）`, "err");
+  }
+}
+
+els.constBtn.addEventListener("click", withBusy(els.constBtn, () => {
+  const count = Math.max(1, Math.min(5000, Number(els.constCount.value) || 1));
+  return sendConstant(count);
+}));
+
+document.getElementById("btn-constant-64").addEventListener("click", withBusy(
+  document.getElementById("btn-constant-64"), () => sendConstant(64)));
+document.getElementById("btn-constant-63").addEventListener("click", withBusy(
+  document.getElementById("btn-constant-63"), () => sendConstant(63)));
 
 els.autoBtn.addEventListener("click", withBusy(els.autoBtn, async () => {
   if (autoEnabled) {
