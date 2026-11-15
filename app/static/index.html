@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设备振动录波工作站</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>设备振动录波工作站</h1>
+        <p class="sub">压力机异常振动取证 · 服务端单连接采集 · 录波窗口：前 100 条 + 后 200 条</p>
+      </div>
+      <div id="statusbar" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+    </header>
+
+    <main class="grid">
+      <section class="panel">
+        <h2>采集状态</h2>
+        <div class="metrics">
+          <div class="metric">
+            <div class="k">仪器连接</div>
+            <div class="v small" id="m-link">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">最后采样序号</div>
+            <div class="v" id="m-lastseq">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">连续采样（前段）</div>
+            <div class="v" id="m-contiguous">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">累计接收</div>
+            <div class="v" id="m-total">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">断点次数</div>
+            <div class="v" id="m-breaks">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">可录波</div>
+            <div class="v small" id="m-ready">—</div>
+          </div>
+        </div>
+        <div class="last-sample" id="last-sample">等待仪器数据…</div>
+        <div class="alert warn" id="stream-alert" hidden></div>
+      </section>
+
+      <section class="panel">
+        <h2>录波操作</h2>
+        <div class="record-actions">
+          <button class="primary" id="btn-record" type="button" disabled>发起录波</button>
+          <button class="ghost small" id="btn-refresh" type="button">立即刷新</button>
+        </div>
+        <div class="record-box">
+          <div class="hint" id="record-hint">
+            以服务端当前最后一条采样为界，保留含该条的前 100 条，完成后继续保留后 200 条。
+          </div>
+          <div class="progress" id="progress"><i></i></div>
+          <div class="hint" id="progress-text">尚未发起录波</div>
+        </div>
+        <div class="alert" id="record-alert" hidden></div>
+      </section>
+
+      <section class="panel" style="grid-column: 1 / -1;">
+        <div class="preview-head">
+          <h2 style="margin:0;">最近波形（实时预览）</h2>
+          <div class="legend">
+            <span><i style="background:#6ed3ff"></i>加速度 g</span>
+            <span class="muted" id="preview-note">仅显示最近 240 条，最终以录波文件为准</span>
+          </div>
+        </div>
+        <canvas class="wave" id="wave" width="1100" height="190"></canvas>
+      </section>
+
+      <section class="panel" style="grid-column: 1 / -1;">
+        <div class="preview-head">
+          <h2 style="margin:0;">录波记录</h2>
+          <span class="muted" style="font-size:12.5px;">关闭页面不影响服务端录波；已完成文件随时可下载</span>
+        </div>
+        <table class="recs">
+          <thead>
+            <tr>
+              <th>编号</th>
+              <th>基准序号</th>
+              <th>状态</th>
+              <th>进度</th>
+              <th>说明</th>
+              <th>文件</th>
+            </tr>
+          </thead>
+          <tbody id="recs-body">
+            <tr><td colspan="6" class="muted" style="font-family:var(--sans)">暂无录波</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer class="foot">
+      服务端通过一条 TCP 连接接收 CSV：<code>序号,采样时间,加速度</code>；
+      断线或序号不连续时，跨越该处的录波失败，重新积累连续 100 条后方可再录。
+    </footer>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

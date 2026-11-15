@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>压力机仪器模拟器</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>压力机仪器模拟器</h1>
+        <p class="sub">通过一条 TCP 连接逐行发送 <code>序号,采样时间,加速度</code> · 可逐批发样、跳号、断线</p>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;" id="statusbar"></div>
+    </header>
+
+    <main class="grid">
+      <section class="panel">
+        <h2>连接状态</h2>
+        <div class="metrics">
+          <div class="metric">
+            <div class="k">TCP 客户端</div>
+            <div class="v small" id="s-conn">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">累计发送</div>
+            <div class="v" id="s-sent">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">因无连接丢弃</div>
+            <div class="v" id="s-dropped">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">下一个序号</div>
+            <div class="v" id="s-next">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">跳号次数</div>
+            <div class="v" id="s-skips">—</div>
+          </div>
+          <div class="metric">
+            <div class="k">断线次数</div>
+            <div class="v" id="s-disconnects">—</div>
+          </div>
+        </div>
+        <div class="last-sample" id="s-detail">等待操作…</div>
+        <div class="alert warn" id="s-alert" hidden>
+          当前没有录波服务连接。批量发送的采样会被直接丢弃，但序号仍会继续推进。
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>采集控制</h2>
+        <div class="record-box">
+          <div class="hint">逐批发样：每次点击发送一批连续采样，录波服务按到达顺序接收。</div>
+          <div class="record-actions">
+            <button class="primary" id="btn-send" type="button">发送 <span id="batch-label">50</span> 条</button>
+            <button class="small" id="btn-send-10" type="button">+10 条</button>
+            <button class="small" id="btn-send-100" type="button">+100 条</button>
+            <button class="small" id="btn-send-220" type="button">+220 条</button>
+          </div>
+          <div class="record-actions" style="margin-top:4px;">
+            <label class="muted" style="font-size:13px;">自定义批量
+              <input id="batch-input" type="number" min="1" max="5000" value="50"
+                     style="width:88px; margin-left:6px; background:#1d2739; color:var(--text);
+                            border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit;">
+            </label>
+          </div>
+          <div class="record-actions" style="margin-top:10px;">
+            <label class="muted" style="font-size:13px;">跳号步长
+              <input id="gap-input" type="number" min="1" max="100000" value="10"
+                     style="width:88px; margin-left:6px; background:#1d2739; color:var(--text);
+                            border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit;">
+            </label>
+            <button id="btn-skip" type="button" style="border-color:rgba(255,193,94,.45);">
+              发送一条跳号采样
+            </button>
+          </div>
+          <div class="record-actions" style="margin-top:10px;">
+            <button id="btn-disconnect" type="button" style="border-color:rgba(255,114,114,.45);">
+              断开 TCP 连接
+            </button>
+          </div>
+          <div class="hint" style="margin-top:6px;">
+            跳号会让录波服务判定序号不连续；断开后服务端会自动重连（约 0.5～5 秒退避）。
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>连续发送</h2>
+        <div class="record-box">
+          <div class="hint">自动以固定频率发送，便于演示重叠录波：在两个浏览器标签页各发起一次录波，服务端会并行完成两份。</div>
+          <div class="record-actions">
+            <button id="btn-auto" type="button">开始连续发送</button>
+            <label class="muted" style="font-size:13px;">频率
+              <input id="auto-rate" type="number" min="0.1" max="50" step="0.1" value="5"
+                     style="width:78px; margin-left:6px; background:#1d2739; color:var(--text);
+                            border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit;">
+              <span style="margin-left:4px;">批/秒</span>
+            </label>
+            <label class="muted" style="font-size:13px;">每批
+              <input id="auto-batch" type="number" min="1" max="1000" value="20"
+                     style="width:78px; margin-left:6px; background:#1d2739; color:var(--text);
+                            border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit;">
+              <span style="margin-left:4px;">条</span>
+            </label>
+          </div>
+          <div class="hint" id="auto-state">连续发送未开启</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>演示步骤</h2>
+        <ol class="steps">
+          <li>打开录波页面（<a href="http://localhost:8000" target="_blank" rel="noopener">http://localhost:8000</a>）。</li>
+          <li>点两次「发送 50 条」，服务端连续采样达到 100 条后即可录波。</li>
+          <li>在录波页面点「发起录波」，再发 4 批 × 50 条，录波自动完成并下载。</li>
+          <li>继续发样到 100 条以上，然后「发送一条跳号采样」——若录波进行中，则该次录波失败。</li>
+          <li>再发 100 条以上重新点「发起录波」；同时在另一个标签页也发起一次，演示重叠录波。</li>
+          <li>录波进行中点「断开 TCP 连接」，观察录波失败与自动重连恢复。</li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="foot">
+      模拟器 TCP 端口 5000 · 控制面板 8001 · 录波页面 8000
+    </footer>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script src="/static/sim.js"></script>
+</body>
+</html>

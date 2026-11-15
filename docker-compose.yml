@@ -1,0 +1,31 @@
+services:
+  instrument-simulator:
+    build:
+      context: ./simulator
+    image: vibration-simulator:latest
+    container_name: instrument-simulator
+    environment:
+      SIM_TCP_PORT: "5000"
+      SIM_HTTP_PORT: "8001"
+      SIM_SAMPLE_INTERVAL_US: "1000"
+    ports:
+      # 浏览器里的仪器模拟器控制面板
+      - "8001:8001"
+      # TCP 也映射到宿主机，方便用 netcat/脚本直接验证协议
+      - "5000:5000"
+    restart: unless-stopped
+
+  recorder:
+    build:
+      context: ./app
+    image: vibration-recorder:latest
+    container_name: vibration-recorder
+    environment:
+      INSTRUMENT_HOST: instrument-simulator
+      INSTRUMENT_PORT: "5000"
+    ports:
+      # 浏览器里的录波页面
+      - "8000:8000"
+    depends_on:
+      - instrument-simulator
+    restart: unless-stopped
